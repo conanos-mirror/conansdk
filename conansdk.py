@@ -48,11 +48,21 @@ class ConanSdk(object):
                     raise GraphDotNotExist(self.name, l)
                 try:
                     result = self.defineGraphPattern().parseFile(dotfile, parseAll=True)
-                    print( result.asList() )
+                    adjacents = result['adjacents']
+                    #print(adjacents)
+                    left = right = None
+                    while len(adjacents):
+                        left = adjacents.pop(0)
+                        adjacents.pop(0)
+                        adjacents.pop(0)
+                        right = adjacents.pop(0)
+                        adjacents.pop(0)
+                        self.addToAdjacentObject(left, right)
                 except pp.ParseException as e:
                     tools.out.info('No match: %s'%(str(e)))
-                
-
+    
+    def addToAdjacentObject(self, left, right):
+        print(left, '->', right)
 
     def defineGraphPattern(self):
         first = pp.Word(pp.alphas+"_", exact=1)
@@ -78,7 +88,7 @@ class ConanSdk(object):
         quote_package_list = pp.OneOrMore(quote_package)
         dependant = pp.Literal('{') + pp.Group(quote_package_list) + pp.Literal('}')
         adjacent = quote_package + pp.Literal('->') + dependant
-        graph = pp.Literal('digraph') + pp.Literal('{') + pp.Group(pp.OneOrMore(adjacent)) + pp.Literal('}')
+        graph = pp.Literal('digraph') + pp.Literal('{') + pp.Group(pp.OneOrMore(adjacent)).setResultsName('adjacents') + pp.Literal('}')
         return graph
 
 if __name__ == '__main__':
