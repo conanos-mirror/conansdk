@@ -46,7 +46,11 @@ class RawPackage(object):
     def __eq__(self, other):
         if isinstance(other, RawPackage):  
             return ((self.name == other.name) and (self.version == other.version))
-        return False 
+        return False
+
+    def __lt__(self, other):
+        assert(isinstance(other, RawPackage))
+        return ((self.name < other.name) or ((self.name==other.name) and self.version < other.version))
 
 '''
 class ConanPackage(object):
@@ -62,11 +66,13 @@ class ConanSdk(object):
         self.name = name
         self.sdk = sdk
         self.raw_adjacent_table = {}
-        self.raw_adjacent_matrix = numpy.zeros( (len(sdk),len(sdk)), dtype=numpy.int8 )
+        self.raw_adjacent_matrix = None
         '''
         self.conan_adjacent_table = {}
         self.conan_adjacent_matrix = numpy.zeros( (len(sdk),len(sdk)), dtype=numpy.int8 )
         '''
+        self.real_sdk = set([])
+        self.sorted_real_sdk = None
 
     def evaluateBuildSequence(self, workspace):
         for l in self.sdk:
@@ -81,11 +87,25 @@ class ConanSdk(object):
                     result = self.defineGraphPattern().parseFile(dotfile, parseAll=True)
                     self.recordAdjacents(result['adjacents'])
                     print(self.raw_adjacent_table)
+                    print(self.raw_adjacent_matrix)
+                    print(self.sorted_real_sdk)
+                    return self.solveBuildSequence()
                 except pp.ParseException as e:
                     tools.out.info('No match: %s'%(str(e)))
+
+    def solveBuildSequence(self):
+        sequence = []
+        sequence.append(self.findSdkLeaves())
+        print(sequence)
     
+    def findSdkLeaves(self):
+        leaves = set([])
+        for i in range(len(self.sorted_real_sdk)):
+            if numpy.sum(self.raw_adjacent_matrix[i,:]) == 0:
+                leaves.add(self.sorted_real_sdk[i])
+        return leaves
+
     def recordAdjacents(self, adjacents):
-        #print(adjacents)
         while len(adjacents):
             lhs = adjacents.pop(0)
             adjacents.pop(0)
@@ -93,18 +113,34 @@ class ConanSdk(object):
             rhs = adjacents.pop(0)
             adjacents.pop(0)
             self.addAdjacent(lhs, rhs)
+        self.updateAdjacentMatrix()
+
+    def updateAdjacentMatrix(self):
+        real_sdk_index = {}
+        self.sorted_real_sdk = sorted(self.real_sdk)
+        for l in self.sorted_real_sdk:
+            real_sdk_index.update({l:self.sorted_real_sdk.index(l)})
+
+        self.raw_adjacent_matrix = numpy.zeros( (len(self.sorted_real_sdk),len(self.sorted_real_sdk)), dtype=numpy.int8 )
+        for k, v in self.raw_adjacent_table.items():
+            for l in v:
+                self.raw_adjacent_matrix[real_sdk_index[k], real_sdk_index[l]] = 1
 
     def addAdjacent(self, lhs, rhs):
-        #print(lhs, '->', rhs)
         result = self.definePackagePattern().parseString(lhs, parseAll=True)
         package = RawPackage(result['name'].strip(), result['version'].strip())
+        self.updateRealSdk(package)
         if package not in self.raw_adjacent_table:
             self.raw_adjacent_table.update({package:set([])})
         for p in rhs:
             result = self.definePackagePattern().parseString(p, parseAll=True)
             rhs_package = RawPackage(result['name'].strip(), result['version'].strip())
+            self.updateRealSdk(rhs_package)
             self.raw_adjacent_table.get(package).add(rhs_package)
-            
+
+    def updateRealSdk(self, package):
+        if package not in self.real_sdk:
+            self.real_sdk.add(package)
 
     def definePackagePattern(self):
         first = pp.Word(pp.alphas+"_", exact=1)
