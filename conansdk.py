@@ -66,15 +66,65 @@ class ConanSdk(object):
         self.name = name
         self.sdk = sdk
         self.raw_adjacent_table = {}
+        self.raw_reverse_adjacent_table = {}
         self.raw_adjacent_matrix = None
+        self.raw_adjacent_matrix_constructed = False
         '''
         self.conan_adjacent_table = {}
         self.conan_adjacent_matrix = numpy.zeros( (len(sdk),len(sdk)), dtype=numpy.int8 )
         '''
         self.real_sdk = set([])
         self.sorted_real_sdk = None
+        self.sorted_real_sdk_index = {}
 
-    def evaluateBuildSequence(self, workspace):
+    def evaluateBuildSequenceAll(self, workspace):
+        
+        self.evaluateAdjacentMatrix(workspace)
+        '''
+        print(self.raw_adjacent_table)
+        print(self.raw_reverse_adjacent_table)
+        print(self.raw_adjacent_matrix)
+        print(self.sorted_real_sdk)
+        '''
+        
+        return self.solveBuildSequence()
+
+    def evaluateBuildSequence(self, changing_library, workspace):
+        self.evaluateAdjacentMatrix(workspace)
+        return self.solveSubBuildSequence(changing_library)
+
+    def solveSubBuildSequence(self, changing_library):
+        build_sequence = []
+        build_sequence.append(set([self.findPackageWithVersion(changing_library)]))
+        continue_loop = True
+        while continue_loop:
+            next_radjacent = self.findNextReverseAdjacent(build_sequence[-1])
+            if not next_radjacent:
+                continue_loop = False
+                continue
+            for i in range(len(build_sequence)):
+                for v in next_radjacent:
+                    if v in build_sequence[i]:
+                        build_sequence[i].remove(v)
+            build_sequence.append(set(next_radjacent))
+        return build_sequence
+
+    def findPackageWithVersion(self, package_name):
+        for v in self.sorted_real_sdk:
+            if v.name == package_name:
+                return v
+        return None
+
+    def findNextReverseAdjacent(self, current):
+        next = []
+        for v in current:
+            if v in self.raw_reverse_adjacent_table:
+                next.extend(list(self.raw_reverse_adjacent_table.get(v)))
+        return next
+
+    def evaluateAdjacentMatrix(self, workspace):
+        if self.raw_adjacent_matrix_constructed:
+            return
         for l in self.sdk:
             with tools.chdir(os.path.join(workspace, l)):
                 if not os.path.exists('conanfile.py'):
@@ -86,24 +136,44 @@ class ConanSdk(object):
                 try:
                     result = self.defineGraphPattern().parseFile(dotfile, parseAll=True)
                     self.recordAdjacents(result['adjacents'])
-                    print(self.raw_adjacent_table)
-                    print(self.raw_adjacent_matrix)
-                    print(self.sorted_real_sdk)
-                    return self.solveBuildSequence()
                 except pp.ParseException as e:
                     tools.out.info('No match: %s'%(str(e)))
+        self.raw_adjacent_matrix_constructed=True
 
     def solveBuildSequence(self):
-        sequence = []
-        sequence.append(self.findSdkLeaves())
-        print(sequence)
-    
+        build_sequence = []
+        (leaves, rest_outdegree) = self.findSdkLeaves()
+        build_sequence.append(leaves)
+        while rest_outdegree:
+            next_layer = {}
+            for k, v in rest_outdegree.items():
+                built_outdegree=self.evaluateBuiltOutdegree(k, build_sequence)
+                if built_outdegree > 0 and (v - built_outdegree)<=0:
+                    next_layer.update({k:self.sorted_real_sdk[k]})
+            if next_layer:
+                build_sequence.append(set(next_layer.values()))
+                for i in next_layer.keys():
+                    rest_outdegree.pop(i)
+        #print(build_sequence)
+        return build_sequence
+
+    def evaluateBuiltOutdegree(self,index, build_sequence):
+        outdegree_sum = 0
+        for layer in build_sequence:
+            for l in layer:
+                outdegree_sum += self.raw_adjacent_matrix[index, self.sorted_real_sdk_index[l]]
+        return outdegree_sum
+
     def findSdkLeaves(self):
         leaves = set([])
+        rest_outdegree = {}
         for i in range(len(self.sorted_real_sdk)):
-            if numpy.sum(self.raw_adjacent_matrix[i,:]) == 0:
+            result = numpy.sum(self.raw_adjacent_matrix[i,:])
+            if result == 0:
                 leaves.add(self.sorted_real_sdk[i])
-        return leaves
+            else:
+                rest_outdegree.update({i:result})
+        return (leaves,rest_outdegree)
 
     def recordAdjacents(self, adjacents):
         while len(adjacents):
@@ -116,15 +186,14 @@ class ConanSdk(object):
         self.updateAdjacentMatrix()
 
     def updateAdjacentMatrix(self):
-        real_sdk_index = {}
         self.sorted_real_sdk = sorted(self.real_sdk)
         for l in self.sorted_real_sdk:
-            real_sdk_index.update({l:self.sorted_real_sdk.index(l)})
+            self.sorted_real_sdk_index.update({l:self.sorted_real_sdk.index(l)})
 
         self.raw_adjacent_matrix = numpy.zeros( (len(self.sorted_real_sdk),len(self.sorted_real_sdk)), dtype=numpy.int8 )
         for k, v in self.raw_adjacent_table.items():
             for l in v:
-                self.raw_adjacent_matrix[real_sdk_index[k], real_sdk_index[l]] = 1
+                self.raw_adjacent_matrix[self.sorted_real_sdk_index[k], self.sorted_real_sdk_index[l]] = 1
 
     def addAdjacent(self, lhs, rhs):
         result = self.definePackagePattern().parseString(lhs, parseAll=True)
@@ -138,9 +207,17 @@ class ConanSdk(object):
             self.updateRealSdk(rhs_package)
             self.raw_adjacent_table.get(package).add(rhs_package)
 
+            self.updateReverseAdjacentTable(package, rhs_package)
+
     def updateRealSdk(self, package):
         if package not in self.real_sdk:
             self.real_sdk.add(package)
+
+    def updateReverseAdjacentTable(self, lhs_package, rhs_package):
+        if rhs_package not in self.raw_reverse_adjacent_table:
+            self.raw_reverse_adjacent_table.update({rhs_package:set([])})
+        self.raw_reverse_adjacent_table.get(rhs_package).add(lhs_package)
+
 
     def definePackagePattern(self):
         first = pp.Word(pp.alphas+"_", exact=1)
@@ -175,4 +252,5 @@ class ConanSdk(object):
 
 if __name__ == '__main__':
     sdk = ConanSdk('gstreamer',['gstreamer'])
-    sdk.evaluateBuildSequence('E:\\workspace')
+    print(sdk.evaluateBuildSequenceAll('E:\\workspace'))
+    print(sdk.evaluateBuildSequence('zlib', 'E:\\workspace'))
