@@ -254,3 +254,7 @@ if __name__ == '__main__':
     sdk = ConanSdk('gstreamer',['gstreamer'])
     print(sdk.evaluateBuildSequenceAll('E:\\workspace'))
     print(sdk.evaluateBuildSequence('zlib', 'E:\\workspace'))
+    print(sdk.evaluateBuildSequence('libffi', 'E:\\workspace'))
+    print(sdk.evaluateBuildSequence('glib', 'E:\\workspace'))
+    print(sdk.evaluateBuildSequence('gtk-doc-lite', 'E:\\workspace'))
+    print(sdk.evaluateBuildSequence('gstreamer', 'E:\\workspace'))
